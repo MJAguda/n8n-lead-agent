@@ -1,0 +1,135 @@
+{
+  "id": "BsToolAvailab001",
+  "name": "Lead Agent · Tool: check_availability",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "date",
+              "type": "string"
+            },
+            {
+              "name": "service",
+              "type": "string"
+            },
+            {
+              "name": "limit",
+              "type": "number"
+            },
+            {
+              "name": "now",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "7d64ed53-4777-46dd-b591-bd89462c1e9d",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const TZ = 'Asia/Manila';\n\n// The calendar is queried for the whole day in clinic time.\nconst day = DateTime.fromISO(String($input.first().json.date ?? ''), { zone: TZ }).startOf('day');\nconst start = day.isValid ? day : DateTime.now().setZone(TZ).startOf('day');\nreturn [{ json: { timeMin: start.toISO(), timeMax: start.plus({ days: 1 }).toISO() } }];\n"
+      },
+      "id": "234e6e55-74d5-460d-84dc-506b0f0e9255",
+      "name": "Day Window",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.CALENDAR_ID }}"
+        },
+        "returnAll": true,
+        "timeMin": "={{ $json.timeMin }}",
+        "timeMax": "={{ $json.timeMax }}",
+        "options": {}
+      },
+      "id": "86943689-b99a-4205-888f-5e4faecfc4ad",
+      "name": "Get Calendar Events",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        440,
+        0
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "bsGoogleCal1",
+          "name": "Google Calendar"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const TZ = 'Asia/Manila';\n\n// Opening hours per weekday (1 = Monday ... 7 = Sunday), with the lunch break as a gap.\nconst HOURS = { 1: [[9, 12], [13, 18]], 2: [[9, 12], [13, 18]], 3: [[9, 12], [13, 18]],\n                4: [[9, 12], [13, 18]], 5: [[9, 12], [13, 18]], 6: [[9, 12], [13, 18]] };\nconst STEP_MINUTES = 30;   // a slot can start every 30 minutes\nconst LEAD_MINUTES = 60;   // no bookings less than an hour from now\nconst DURATIONS = [[/root canal|whitening/i, 90], [/clean|prophylaxis|filling|extraction/i, 60]];\n\nconst req = $('When Executed by Another Workflow').first().json;\nconst now = req.now ? DateTime.fromISO(req.now, { zone: TZ }) : DateTime.now().setZone(TZ);\nconst day = DateTime.fromISO(String(req.date ?? ''), { zone: TZ }).startOf('day');\nconst service = req.service || 'consultation';\nconst duration = DURATIONS.find(([re]) => re.test(service))?.[1] ?? 30;\nconst limit = Number(req.limit ?? 5);\nconst reply = (slots, message) => [{ json: { date: req.date, service, duration_minutes: duration, slots, message } }];\n\nif (!day.isValid) return reply([], 'Invalid date. Use the YYYY-MM-DD format.');\nif (day < now.startOf('day')) return reply([], 'That date has already passed.');\nconst windows = HOURS[day.weekday];\nif (!windows) return reply([], 'The clinic is closed on Sundays.');\n\nconst busy = $input.all().map((i) => i.json)\n  .filter((e) => e.start && e.status !== 'cancelled' && e.transparency !== 'transparent')\n  .map((e) => e.start.dateTime\n    ? [DateTime.fromISO(e.start.dateTime), DateTime.fromISO(e.end.dateTime)]\n    : [DateTime.fromISO(e.start.date, { zone: TZ }), DateTime.fromISO(e.end.date, { zone: TZ })]);\n\nconst earliest = now.plus({ minutes: LEAD_MINUTES });\nconst slots = [];\nfor (const [open, close] of windows) {\n  const closing = day.set({ hour: close });\n  for (let t = day.set({ hour: open }); t.plus({ minutes: duration }) <= closing; t = t.plus({ minutes: STEP_MINUTES })) {\n    const end = t.plus({ minutes: duration });\n    if (t < earliest || busy.some(([s, e]) => t < e && end > s)) continue;\n    slots.push({ start: t.toISO(), end: end.toISO(), label: t.setLocale('en-US').toFormat('ccc, LLL d · h:mm a') });\n  }\n}\n\nconst offered = limit > 0 ? slots.slice(0, limit) : slots;\nreturn reply(offered, slots.length ? slots.length + ' open slots that day.' : 'No open slots that day. Try another date.');\n"
+      },
+      "id": "196f7103-a9da-4e9e-b356-97dea2064b11",
+      "name": "Build Free Slots",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Day Window",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Day Window": {
+      "main": [
+        [
+          {
+            "node": "Get Calendar Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Calendar Events": {
+      "main": [
+        [
+          {
+            "node": "Build Free Slots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "tags": []
+}

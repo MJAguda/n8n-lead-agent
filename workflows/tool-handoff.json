@@ -1,0 +1,229 @@
+{
+  "id": "BsToolHandoff001",
+  "name": "Lead Agent · Tool: handoff_to_human",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "session_id",
+              "type": "string"
+            },
+            {
+              "name": "reason",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "c61e822b-36df-4e5e-9d6e-c1b5dd2b150c",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT message FROM n8n_chat_histories WHERE session_id = $1 ORDER BY id",
+        "options": {
+          "queryReplacement": "={{ [$json.session_id] }}"
+        }
+      },
+      "id": "bb441af5-ada4-4225-a52e-fb4e72c767f1",
+      "name": "Load Chat History",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        220,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "bsPostgres01",
+          "name": "BrightSmile Postgres"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const req = $('When Executed by Another Workflow').first().json;\nconst SPEAKER = { human: 'Patient', ai: 'Assistant' };\nconst lines = $input.all()\n  .map((i) => i.json.message)\n  .filter((m) => m && SPEAKER[m.type] && m.content)\n  .map((m) => SPEAKER[m.type] + ': ' + m.content);\nreturn [{ json: { session_id: req.session_id, reason: req.reason || 'Not given', transcript: lines.join('\\n') || '(no messages yet)' } }];\n"
+      },
+      "id": "0446bf1c-f2a9-40a5-9751-452e13aaec97",
+      "name": "Format Transcript",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH lead AS (\n  UPDATE leads SET status = 'handoff', updated_at = now() WHERE session_id = $1 RETURNING id\n)\nINSERT INTO handoffs (lead_id, session_id, reason, transcript)\nVALUES ((SELECT id FROM lead), $1, $2, $3)\nRETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$json.session_id, $json.reason, $json.transcript] }}"
+        }
+      },
+      "id": "2d28d204-8695-4795-924f-45b77ec9db02",
+      "name": "Save Handoff",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        660,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "bsPostgres01",
+          "name": "BrightSmile Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT name, phone, email FROM leads WHERE session_id = $1",
+        "options": {
+          "queryReplacement": "={{ [$('Format Transcript').item.json.session_id] }}"
+        }
+      },
+      "id": "88f69e76-96ec-4d12-9626-a306bb4873c5",
+      "name": "Load Lead",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        880,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "bsPostgres01",
+          "name": "BrightSmile Postgres"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $env.STAFF_EMAIL }}",
+        "subject": "=🙋 Chat handoff: {{ $('Format Transcript').item.json.reason }}",
+        "emailType": "text",
+        "message": "=A patient on the website chat needs a person.\n\nReason: {{ $('Format Transcript').item.json.reason }}\nName: {{ $json.name || '-' }}\nPhone: {{ $json.phone || '-' }}\nEmail: {{ $json.email || '-' }}\n\nTranscript\n----------\n{{ $('Format Transcript').item.json.transcript }}\n\nChat session: {{ $('Format Transcript').item.json.session_id }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "5101e98c-5da2-4385-b6c3-b5770d9f48fe",
+      "name": "Email Staff",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        0
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "bsGmail00001",
+          "name": "Gmail"
+        }
+      },
+      "webhookId": "398b4d33-a2d0-499d-be05-e331107847d1",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { handed_off: true, message: 'The clinic team has been notified and will contact the patient soon.' } }];\n"
+      },
+      "id": "c99ed1b5-4122-4f29-bbb1-f139c4aede20",
+      "name": "Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Load Chat History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Chat History": {
+      "main": [
+        [
+          {
+            "node": "Format Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Transcript": {
+      "main": [
+        [
+          {
+            "node": "Save Handoff",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Handoff": {
+      "main": [
+        [
+          {
+            "node": "Load Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Lead": {
+      "main": [
+        [
+          {
+            "node": "Email Staff",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Staff": {
+      "main": [
+        [
+          {
+            "node": "Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "tags": []
+}

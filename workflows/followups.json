@@ -1,0 +1,161 @@
+{
+  "id": "BsFollowups00001",
+  "name": "Lead Agent · Follow-ups and reminders",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "1007c45f-b2f9-415f-af7d-1a040d6db1ed",
+      "name": "Every 15 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Qualified leads who never booked: one nudge after 24h, a last one after 72h.\nSELECT l.id AS lead_id, NULL::bigint AS appointment_id, 'nudge_24h' AS kind,\n       l.name, l.email, l.service, NULL::timestamptz AS starts_at\nFROM leads l\nWHERE l.status = 'qualified' AND l.email IS NOT NULL\n  AND l.updated_at BETWEEN now() - interval '72 hours' AND now() - interval '24 hours'\n  AND NOT EXISTS (SELECT 1 FROM followups f WHERE f.lead_id = l.id AND f.kind = 'nudge_24h')\nUNION ALL\nSELECT l.id, NULL, 'nudge_72h', l.name, l.email, l.service, NULL\nFROM leads l\nWHERE l.status = 'qualified' AND l.email IS NOT NULL\n  AND l.updated_at BETWEEN now() - interval '7 days' AND now() - interval '72 hours'\n  AND NOT EXISTS (SELECT 1 FROM followups f WHERE f.lead_id = l.id AND f.kind = 'nudge_72h')\nUNION ALL\n-- Booked patients: a reminder the day before.\nSELECT a.lead_id, a.id, 'appt_reminder', l.name, l.email, a.service, a.starts_at\nFROM appointments a JOIN leads l ON l.id = a.lead_id\nWHERE a.status = 'booked' AND l.email IS NOT NULL\n  AND a.starts_at BETWEEN now() + interval '1 hour' AND now() + interval '24 hours'\n  AND NOT EXISTS (SELECT 1 FROM followups f WHERE f.appointment_id = a.id AND f.kind = 'appt_reminder')",
+        "options": {}
+      },
+      "id": "f0ff52c6-5197-43c2-894d-0c2cd3d5a69b",
+      "name": "Due Follow-ups",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        220,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "bsPostgres01",
+          "name": "BrightSmile Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const TZ = 'Asia/Manila';\nreturn $input.all().filter((i) => i.json.kind).map(({ json: r }) => {\n  const hi = 'Hi ' + (r.name ? r.name.split(' ')[0] : 'there') + ',';\n  const sign = '\\n\\nBrightSmile Dental Clinic\\n(032) 555-0142';\n  const when = r.starts_at\n    ? DateTime.fromISO(new Date(r.starts_at).toISOString()).setZone(TZ).setLocale('en-US').toFormat(\"ccc, LLL d 'at' h:mm a\")\n    : null;\n  const emails = {\n    nudge_24h: {\n      subject: 'Still thinking about your ' + r.service + '?',\n      body: hi + '\\n\\nThanks for chatting with us yesterday about your ' + r.service + '. We still have open slots this week. Reply to this email or chat with us on our website and we will book you in.' + sign,\n    },\n    nudge_72h: {\n      subject: 'Your ' + r.service + ' at BrightSmile',\n      body: hi + \"\\n\\nThis is our last reminder about the \" + r.service + \" you asked about. Whenever you're ready, just reply to this email and we'll find a time that works for you.\" + sign,\n    },\n    appt_reminder: {\n      subject: 'Reminder: your appointment tomorrow',\n      body: hi + '\\n\\nA friendly reminder of your ' + r.service + ' on ' + when + '. If you need to reschedule, please reply to this email or call us.' + sign,\n    },\n  };\n  return { json: { lead_id: r.lead_id, appointment_id: r.appointment_id ?? null, kind: r.kind, to: r.email, ...emails[r.kind] } };\n});\n"
+      },
+      "id": "2f316ae5-f11c-4491-8403-c99e8b056e42",
+      "name": "Build Emails",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "text",
+        "message": "={{ $json.body }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "af0b0044-9754-48d3-b2be-1a2d1822f946",
+      "name": "Send Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        0
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "bsGmail00001",
+          "name": "Gmail"
+        }
+      },
+      "webhookId": "151f4f9e-ec95-4496-a7e6-21009535e86c"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO followups (lead_id, appointment_id, kind) VALUES ($1, NULLIF($2, '')::bigint, $3)",
+        "options": {
+          "queryReplacement": "={{ [$('Build Emails').item.json.lead_id, String($('Build Emails').item.json.appointment_id ?? ''), $('Build Emails').item.json.kind] }}"
+        }
+      },
+      "id": "2fb2163b-a536-4bc6-9216-5186b473bc82",
+      "name": "Log Follow-up",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        880,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "bsPostgres01",
+          "name": "BrightSmile Postgres"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 15 Minutes": {
+      "main": [
+        [
+          {
+            "node": "Due Follow-ups",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Due Follow-ups": {
+      "main": [
+        [
+          {
+            "node": "Build Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Emails": {
+      "main": [
+        [
+          {
+            "node": "Send Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email": {
+      "main": [
+        [
+          {
+            "node": "Log Follow-up",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}

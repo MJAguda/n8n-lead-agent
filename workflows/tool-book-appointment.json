@@ -1,0 +1,497 @@
+{
+  "id": "BsToolBookAppt01",
+  "name": "Lead Agent · Tool: book_appointment",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "session_id",
+              "type": "string"
+            },
+            {
+              "name": "start",
+              "type": "string"
+            },
+            {
+              "name": "service",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "c0010fba-bcdd-40d3-8752-3ea8d8afa2d3",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM leads WHERE session_id = $1",
+        "options": {
+          "queryReplacement": "={{ [$json.session_id] }}"
+        }
+      },
+      "id": "0c5048b8-eac1-438b-8dbc-a19baf0ec9c0",
+      "name": "Load Lead",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        220,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "bsPostgres01",
+          "name": "BrightSmile Postgres"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "BsToolAvailab001"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "date": "={{ DateTime.fromISO($('When Executed by Another Workflow').item.json.start).setZone('Asia/Manila').toISODate() ?? '' }}",
+            "service": "={{ $('When Executed by Another Workflow').item.json.service }}",
+            "limit": "={{ 0 }}",
+            "now": ""
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "date",
+              "displayName": "date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "service",
+              "displayName": "service",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "limit",
+              "displayName": "limit",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            },
+            {
+              "id": "now",
+              "displayName": "now",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "f3fe240d-c093-418c-a7f4-dd6df5deefa5",
+      "name": "Get Free Slots",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Re-checks the requested start against live availability right before booking.\nconst req = $('When Executed by Another Workflow').first().json;\nconst lead = $('Load Lead').first().json || {};\nconst slots = $input.first().json.slots ?? [];\nconst refuse = (message, alternatives = []) => [{ json: { free: false, message, alternatives } }];\n\nif (!lead.id || !lead.name || !(lead.phone || lead.email)) {\n  return refuse(\"Call save_lead with the patient's name and a phone number or email before booking.\");\n}\nconst wanted = DateTime.fromISO(String(req.start ?? ''));\nif (!wanted.isValid) return refuse('start must be the exact ISO start value of a slot from check_availability.');\n\nconst slot = slots.find((s) => DateTime.fromISO(s.start).toMillis() === wanted.toMillis());\nif (!slot) return refuse('That time is no longer available. Offer the patient one of the alternatives.', slots.slice(0, 3));\n\nreturn [{ json: {\n  free: true, start: slot.start, end: slot.end, label: slot.label, service: req.service,\n  session_id: req.session_id, lead_id: lead.id, name: lead.name, phone: lead.phone, email: lead.email,\n} }];\n"
+      },
+      "id": "8e3b3bd4-d817-418a-9526-d2269d56a4c2",
+      "name": "Verify Slot",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "13bb9960-257f-47f3-b4a9-b9bd233a2051",
+              "leftValue": "={{ $json.free }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "7d1199de-f20f-4801-88ad-4a2b74ca2d22",
+      "name": "Slot Free?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH appt AS (\n  INSERT INTO appointments (lead_id, service, starts_at, ends_at)\n  VALUES ($1, $2, $3::timestamptz, $4::timestamptz)\n  RETURNING id\n), lead AS (\n  UPDATE leads SET status = 'booked', updated_at = now() WHERE id = $1\n)\nSELECT id FROM appt",
+        "options": {
+          "queryReplacement": "={{ [$json.lead_id, $json.service, $json.start, $json.end] }}"
+        }
+      },
+      "id": "6d89acf7-478b-4ed5-ac1d-93aa823fa7a9",
+      "name": "Save Appointment",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1100,
+        -100
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "bsPostgres01",
+          "name": "BrightSmile Postgres"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $env.CALENDAR_ID }}"
+        },
+        "start": "={{ $('Verify Slot').item.json.start }}",
+        "end": "={{ $('Verify Slot').item.json.end }}",
+        "additionalFields": {
+          "summary": "={{ $('Verify Slot').item.json.service }}: {{ $('Verify Slot').item.json.name }}",
+          "description": "=Booked by the website chat assistant.\nPhone: {{ $('Verify Slot').item.json.phone || '-' }}\nEmail: {{ $('Verify Slot').item.json.email || '-' }}\nChat session: {{ $('Verify Slot').item.json.session_id }}"
+        }
+      },
+      "id": "1af44222-4a6a-4815-882d-2a9c8215c445",
+      "name": "Create Calendar Event",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        1320,
+        -200
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "bsGoogleCal1",
+          "name": "Google Calendar"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE appointments SET calendar_event_id = $1 WHERE id = $2",
+        "options": {
+          "queryReplacement": "={{ [$json.id, $('Save Appointment').item.json.id] }}"
+        }
+      },
+      "id": "66dc8008-07ee-4bc9-8c12-57e9b2e66241",
+      "name": "Attach Event Id",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1540,
+        -200
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "bsPostgres01",
+          "name": "BrightSmile Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ca9a595a-cdf8-4a06-b6a3-ce69c4a05744",
+              "leftValue": "={{ $('Verify Slot').item.json.email }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "bb47cf75-54e5-4482-a901-7b92358425cb",
+      "name": "Has Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        1760,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Verify Slot').item.json.email }}",
+        "subject": "=Your BrightSmile Dental appointment: {{ $('Verify Slot').item.json.label }}",
+        "emailType": "text",
+        "message": "=Hi {{ $('Verify Slot').item.json.name.split(' ')[0] }},\n\nYour {{ $('Verify Slot').item.json.service }} is booked for {{ $('Verify Slot').item.json.label }}.\n\nBrightSmile Dental Clinic\n2F Ayala Business Park Tower, Cebu Business Park, Cebu City\n(032) 555-0142\n\nNew patients, please arrive 10 minutes early. If you need to reschedule, reply to this email or call us at least 24 hours before.\n\nSee you soon!",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "52cf442a-9845-4c1d-9d1b-aed867fc0ba2",
+      "name": "Email Confirmation",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1980,
+        -300
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "bsGmail00001",
+          "name": "Gmail"
+        }
+      },
+      "webhookId": "aeb87109-2a58-42aa-b527-34614e27dd54",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const slot = $('Verify Slot').first().json;\nreturn [{ json: {\n  booked: true,\n  appointment_id: $('Save Appointment').first().json.id,\n  start: slot.start,\n  label: slot.label,\n  message: slot.email ? 'Booked. A confirmation email was sent to ' + slot.email + '.' : 'Booked.',\n} }];\n"
+      },
+      "id": "1f717135-e7c5-44ae-84e6-04863f571328",
+      "name": "Booked",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        -200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// The database refused an overlapping booking: someone took the slot a moment ago.\nreturn [{ json: { booked: false, message: 'That time was just taken. Call check_availability again and offer new times.' } }];\n"
+      },
+      "id": "c5a6fec4-e132-4a33-ab44-010c7cffaaff",
+      "name": "Slot Taken",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $('Verify Slot').first().json;\nreturn [{ json: { booked: false, message: r.message, alternatives: r.alternatives } }];\n"
+      },
+      "id": "f31fdf89-4919-42d0-9856-741ddcd3cc5a",
+      "name": "Not Booked",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        100
+      ]
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Load Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Lead": {
+      "main": [
+        [
+          {
+            "node": "Get Free Slots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Free Slots": {
+      "main": [
+        [
+          {
+            "node": "Verify Slot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Slot": {
+      "main": [
+        [
+          {
+            "node": "Slot Free?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slot Free?": {
+      "main": [
+        [
+          {
+            "node": "Save Appointment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Not Booked",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Appointment": {
+      "main": [
+        [
+          {
+            "node": "Create Calendar Event",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Slot Taken",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Calendar Event": {
+      "main": [
+        [
+          {
+            "node": "Attach Event Id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Event Id": {
+      "main": [
+        [
+          {
+            "node": "Has Email?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Email?": {
+      "main": [
+        [
+          {
+            "node": "Email Confirmation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Booked",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Confirmation": {
+      "main": [
+        [
+          {
+            "node": "Booked",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "tags": []
+}

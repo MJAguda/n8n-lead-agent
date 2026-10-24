@@ -1,0 +1,17 @@
+{
+  "name": "n8n-lead-agent",
+  "private": true,
+  "type": "module",
+  "description": "AI lead qualifier and appointment booker built with n8n, Groq and Postgres",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test",
+    "sync": "node scripts/sync-knowledge.js",
+    "eval": "node scripts/eval.js"
+  },
+  "devDependencies": {
+    "luxon": "3.7.2"
+  }
+}

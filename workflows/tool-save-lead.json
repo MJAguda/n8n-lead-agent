@@ -1,0 +1,279 @@
+{
+  "id": "BsToolSaveLead01",
+  "name": "Lead Agent · Tool: save_lead",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "session_id",
+              "type": "string"
+            },
+            {
+              "name": "name",
+              "type": "string"
+            },
+            {
+              "name": "phone",
+              "type": "string"
+            },
+            {
+              "name": "email",
+              "type": "string"
+            },
+            {
+              "name": "service",
+              "type": "string"
+            },
+            {
+              "name": "urgency",
+              "type": "string"
+            },
+            {
+              "name": "is_new_patient",
+              "type": "string"
+            },
+            {
+              "name": "payment",
+              "type": "string"
+            },
+            {
+              "name": "preferred_time",
+              "type": "string"
+            },
+            {
+              "name": "notes",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "2cbc4dc9-b962-4da1-b910-9ef5a7b0d6af",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM leads WHERE session_id = $1",
+        "options": {
+          "queryReplacement": "={{ [$json.session_id] }}"
+        }
+      },
+      "id": "2738dc65-70db-4cb9-8e54-320757eaaee8",
+      "name": "Load Lead",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        220,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "bsPostgres01",
+          "name": "BrightSmile Postgres"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merges what the agent just learned with the lead saved earlier in this chat, then scores it.\nconst incoming = $('When Executed by Another Workflow').first().json;\nconst existing = $input.first().json || {};\n\nconst clean = (v) => (v === undefined || v === null || String(v).trim() === '' ? null : String(v).trim());\nconst pick = (field) => clean(incoming[field]) ?? clean(existing[field]);\n\nfunction normalizePhone(raw) {\n  if (!raw) return null;\n  let digits = String(raw).replace(/\\D/g, '');\n  if (digits.startsWith('63')) digits = digits.slice(2);\n  else if (digits.startsWith('0')) digits = digits.slice(1);\n  return /^9\\d{9}$/.test(digits) ? '+63' + digits : null;\n}\nfunction normalizeEmail(raw) {\n  if (!raw) return null;\n  const email = String(raw).trim().toLowerCase();\n  return /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email) ? email : null;\n}\n\nconst lead = {\n  session_id: incoming.session_id,\n  name: pick('name'),\n  phone: normalizePhone(pick('phone')),\n  email: normalizeEmail(pick('email')),\n  service: pick('service'),\n  urgency: ['emergency', 'pain', 'routine'].includes(pick('urgency')?.toLowerCase()) ? pick('urgency').toLowerCase() : null,\n  is_new_patient: /^(yes|true)$/i.test(incoming.is_new_patient ?? '') ? true\n    : /^(no|false)$/i.test(incoming.is_new_patient ?? '') ? false : (existing.is_new_patient ?? null),\n  payment: pick('payment'),\n  preferred_time: pick('preferred_time'),\n  notes: pick('notes'),\n};\n\n// Score 0-100: urgency, value of the service, how reachable they are, how soon they want to come in.\nconst HIGH_VALUE = /implant|braces|orthodont|aligner|invisalign|veneer|crown|root canal|whitening/i;\nconst SOON = /\\b(asap|today|tonight|tomorrow|this week|right now|ngayon|bukas|karon|ugma)\\b/i;\nlet score = { emergency: 35, pain: 25, routine: 5 }[lead.urgency] ?? 0;\nif (lead.service) score += HIGH_VALUE.test(lead.service) ? 25 : 10;\nif (lead.phone) score += 10;\nif (lead.email) score += 10;\nif (lead.name) score += 5;\nif (lead.preferred_time) {\n  const when = Date.parse(lead.preferred_time);\n  const days = Number.isNaN(when) ? null : (when - Date.now()) / 86400000;\n  if (SOON.test(lead.preferred_time) || (days !== null && days <= 7)) score += 15;\n}\nif (lead.is_new_patient) score += 5;\nscore = Math.min(score, 100);\n\nconst tier = score >= 70 ? 'hot' : score >= 40 ? 'warm' : 'cold';\nconst tags = [tier];\nif (lead.urgency === 'emergency') tags.push('emergency');\nif (lead.is_new_patient) tags.push('new-patient');\nif (/hmo|maxicare|intellicare|medicard|philcare/i.test(lead.payment ?? '')) tags.push('hmo');\n\nconst missing = [];\nif (!lead.name) missing.push('name');\nif (!lead.phone && !lead.email) missing.push('phone or email');\nif (!lead.service) missing.push('service');\nif (!lead.preferred_time) missing.push('preferred_time');\n\nconst LOCKED = ['booked', 'handoff', 'no_show', 'completed', 'lost'];\nconst status = LOCKED.includes(existing.status) ? existing.status\n  : lead.name && (lead.phone || lead.email) && lead.service ? 'qualified' : 'new';\n\n// Alert staff once, the first time a lead turns hot or reports an emergency.\nconst wasFlagged = existing.tier === 'hot' || (existing.tags ?? []).includes('emergency');\nconst alert_staff = !wasFlagged && (tier === 'hot' || lead.urgency === 'emergency');\n\nreturn [{ json: { ...lead, score, tier, status, tags, missing, alert_staff } }];\n"
+      },
+      "id": "e953c16c-2ff7-4632-b2d5-f13b63a21979",
+      "name": "Normalize and Score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO leads (session_id, name, phone, email, service, urgency, is_new_patient, payment,\n                   preferred_time, notes, score, tier, status, tags)\nVALUES ($1, NULLIF($2, ''), NULLIF($3, ''), NULLIF($4, ''), NULLIF($5, ''), NULLIF($6, ''),\n        NULLIF($7, '')::boolean, NULLIF($8, ''), NULLIF($9, ''), NULLIF($10, ''), $11, $12, $13,\n        string_to_array($14, ','))\nON CONFLICT (session_id) DO UPDATE SET\n  name = EXCLUDED.name, phone = EXCLUDED.phone, email = EXCLUDED.email, service = EXCLUDED.service,\n  urgency = EXCLUDED.urgency, is_new_patient = EXCLUDED.is_new_patient, payment = EXCLUDED.payment,\n  preferred_time = EXCLUDED.preferred_time, notes = EXCLUDED.notes, score = EXCLUDED.score,\n  tier = EXCLUDED.tier, status = EXCLUDED.status, tags = EXCLUDED.tags, updated_at = now()\nRETURNING id",
+        "options": {
+          "queryReplacement": "={{ [$json.session_id, $json.name ?? '', $json.phone ?? '', $json.email ?? '', $json.service ?? '', $json.urgency ?? '', String($json.is_new_patient ?? ''), $json.payment ?? '', $json.preferred_time ?? '', $json.notes ?? '', $json.score, $json.tier, $json.status, $json.tags.join(',')] }}"
+        }
+      },
+      "id": "770f1c03-c983-449a-8567-36f913890e6a",
+      "name": "Upsert Lead",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        660,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "bsPostgres01",
+          "name": "BrightSmile Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "2cf534b5-9061-4e04-a8da-55b24539426c",
+              "leftValue": "={{ $('Normalize and Score').item.json.alert_staff }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "c9a3d071-187a-4012-9e1a-e4e358b10e91",
+      "name": "Alert Staff?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.4,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $env.STAFF_EMAIL }}",
+        "subject": "={{ $('Normalize and Score').item.json.urgency === 'emergency' ? '🚨 Emergency' : '🔥 Hot lead' }}: {{ $('Normalize and Score').item.json.name || 'New patient' }} ({{ $('Normalize and Score').item.json.service || 'service not given yet' }})",
+        "emailType": "text",
+        "message": "={{ (() => { const l = $('Normalize and Score').item.json; return [\n  'A website chat lead needs attention.',\n  '',\n  'Name: ' + (l.name || '-'),\n  'Phone: ' + (l.phone || '-'),\n  'Email: ' + (l.email || '-'),\n  'Service: ' + (l.service || '-'),\n  'Urgency: ' + (l.urgency || '-'),\n  'Preferred time: ' + (l.preferred_time || '-'),\n  'Score: ' + l.score + ' (' + l.tier + ')',\n  'Chat session: ' + l.session_id,\n].join('\\n'); })() }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "ac10ff6b-aab5-4088-ac83-86febb904844",
+      "name": "Email Staff",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        -100
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "bsGmail00001",
+          "name": "Gmail"
+        }
+      },
+      "webhookId": "7e22fc1e-9be3-4008-9508-cda887e4a6e8",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const lead = $('Normalize and Score').first().json;\nreturn [{ json: {\n  saved: true,\n  lead_id: $('Upsert Lead').first().json.id,\n  score: lead.score,\n  tier: lead.tier,\n  status: lead.status,\n  still_missing: lead.missing,\n} }];\n"
+      },
+      "id": "0619161c-1f47-4c7e-b218-802202c78962",
+      "name": "Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Load Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Lead": {
+      "main": [
+        [
+          {
+            "node": "Normalize and Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize and Score": {
+      "main": [
+        [
+          {
+            "node": "Upsert Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Lead": {
+      "main": [
+        [
+          {
+            "node": "Alert Staff?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Staff?": {
+      "main": [
+        [
+          {
+            "node": "Email Staff",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Staff": {
+      "main": [
+        [
+          {
+            "node": "Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "tags": []
+}

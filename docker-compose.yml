@@ -1,0 +1,50 @@
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:2.44.6
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    env_file: .env
+    environment:
+      GENERIC_TIMEZONE: Asia/Manila
+      TZ: Asia/Manila
+      WEBHOOK_URL: ${WEBHOOK_URL:-http://localhost:5678/}
+      # The workflows read STAFF_EMAIL and CALENDAR_ID from $env.
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./:/project:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # The CRM: leads, appointments, handoffs, follow-ups and chat memory.
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      retries: 10
+
+  # The demo clinic website with the chat widget.
+  site:
+    image: nginx:1.29-alpine
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./site:/usr/share/nginx/html:ro
+
+volumes:
+  n8n_data:
+  pg_data:
