@@ -4,6 +4,8 @@ A website chat assistant that answers questions, qualifies leads, books real app
 
 The demo business is **BrightSmile Dental**, a fictional clinic in Cebu. Swap the clinic info file and it works for any appointment-based business: clinics, salons, law firms, home services, real estate.
 
+![The demo clinic website with the chat assistant open](docs/clinic-site-chat-wide.png)
+
 ## The problem
 
 Most small businesses answer website enquiries hours later, and by then the lead has booked somewhere else. Front-desk staff also spend much of the day answering the same questions about prices, hours and HMO coverage.
@@ -43,6 +45,12 @@ flowchart LR
 ```
 
 Each tool is its own **sub-workflow**, so the business rules (scoring, opening hours, slot checks) live in plain JavaScript Code nodes and not in the prompt. That makes them **unit-tested** and predictable. The agent decides *what* to do, and the tools decide *whether it's allowed*.
+
+![The main workflow: chat trigger, AI Agent, Groq model, Postgres memory and four tools](docs/agent-canvas-wide.png)
+
+![The book_appointment tool workflow, with the error branch for a slot taken at the same moment](docs/book-appointment-canvas-wide.png)
+
+![A successful save_lead run: load, normalise and score, upsert, no staff alert for a warm lead](docs/save-lead-run-wide.png)
 
 | Workflow | What it does |
 |---|---|
